@@ -12,24 +12,20 @@ Author: Sachin Krishnan T V (sachin@physics.iitm.ac.in)
 #include <png.h>
 #include "../pcg_random/pcg_random.hpp"
 
-#define N 80  // Size of the system
-#define MCS 10000  // Number of independent configurations
-//#define INT 1.5 // Magnitude of interaction potential
-#define EXT 0.0 // Magnitude of external field
-
-//#define KBT 1.0
-
-double JOverkBT;
+int SIZE;  // Size of the system
+int MCS; // Number of independent configurations
+double INT; //Interaction strength
+double EXT; // Magnitude of external field
 
 // This captures the configuration. false -> down, true -> up.
-bool lattice[N][N];
+bool *lattice;
 
 using namespace std;
 
 void outputToPng(int t)
 {
     int x,y;
-    int width = N, height = N;
+    int width = SIZE, height = SIZE;
     png_byte bit_depth = 8;
 
     png_structp png_ptr;
@@ -74,7 +70,7 @@ void outputToPng(int t)
         row_pointers[y] = (png_byte*) malloc(png_get_rowbytes(png_ptr, info_ptr));
         for(x = 0; x < width;x++)
         {
-            if(lattice[x][y])
+            if(lattice[x*SIZE+y])
             {
                 row_pointers[y][x*4] = 0;
                 row_pointers[y][x*4+1] = 0;
@@ -102,11 +98,25 @@ void outputToPng(int t)
         free(row_pointers[y]);
     free(row_pointers);
 
+    png_destroy_write_struct(&png_ptr,&info_ptr);
+
     fclose(dumpf);
 }
 
 int main(int argc, char *argv[])
 {
+    if(argc>=5)
+    {
+        SIZE = atoi(argv[1]);
+        MCS = atoi(argv[2]);
+        INT = atof(argv[3]);
+        EXT = atof(argv[4]);
+    }
+    else
+    {
+        cout<<"Usage : "<<argv[0]<<" <Size> <MCSweeps> <InteractionStrength> <ExternalFieldStrength>"<<endl;
+        return 0;
+    }
     int i, j, k, s;
     int il, ir;
     int jl, jr;
@@ -117,87 +127,97 @@ int main(int argc, char *argv[])
     pcg_extras::seed_seq_from<random_device> seed_source;
     pcg32 rng(seed_source);
     uniform_int_distribution<int> udist(0, 1);
-    uniform_int_distribution<int> site(0, N*N-1);
+    uniform_int_distribution<int> site(0, SIZE*SIZE-1);
     uniform_real_distribution<double> metro(0.0,1.0);
 
     double initial_energy, final_energy, dE;
     double energy;
     double mag_per_step;
 
-    if(argc>1)
+    lattice = (bool *)malloc(SIZE*SIZE*sizeof(bool));
+    if(lattice == nullptr)
     {
-        JOverkBT = atof(argv[1]);
-    }
-    else
-    {
-        cout<<"Usage : "<<argv[0]<<" <kBT>"<<endl;
-        return 0;
+        cout<<"Could not allocate memory for lattice. Qutting.\n";
+        return 1;
     }
     logf.open("log.dat", ios::out);
-
+    logf<<"#timestep\tenergy\tmagnetization_per_site\n";
     // Initial state
     // Taking all down/up spin as initial state is not a good idea, because that is the ground state of the system
-    for(i = 0; i < N;i++)
-        for(j = 0;j < N;j++)
-            lattice[i][j] = static_cast<bool>(udist(rng));
+    for(i = 0; i < SIZE*SIZE;i++)
+        lattice[i] = static_cast<bool>(udist(rng));
+
+    bool lsite, lleft, lright, lup, ldown;
 
     // Main MC Loop
-    for(k = 0; k < MCS;k++)
+    for(k = 0; k <= MCS;k++)
     {
-        for(s = 0;s < N*N;s++)
+        cout<<"\rTimestep : "<<k<<" / "<<MCS<<"\t";
+        fflush(stdout);
+        for(s = 0;s < SIZE*SIZE;s++)
         {
             rand_site = site(rng);
-            i = rand_site / N;
-            j = rand_site % N;
+            i = rand_site / SIZE;
+            j = rand_site % SIZE;
 
-            il = (i==0)?N-1:i-1;
-            ir = (i==N-1)?0:i+1;
+            il = (i==0)?SIZE-1:i-1;
+            ir = (i==SIZE-1)?0:i+1;
 
-            jl = (j==0)?N-1:j-1;
-            jr = (j==N-1)?0:j+1;
+            jl = (j==0)?SIZE-1:j-1;
+            jr = (j==SIZE-1)?0:j+1;
+            lsite = lattice[rand_site];
+            lleft = lattice[i*SIZE+jl];
+            lright = lattice[i*SIZE+jr];
+            lup = lattice[il*SIZE+j];
+            ldown = lattice[ir*SIZE+j];
 
-            initial_energy = ((lattice[i][j] ^ lattice[il][j])?JOverkBT:-JOverkBT);
-            initial_energy += ((lattice[i][j] ^ lattice[ir][j])?JOverkBT:-JOverkBT);
-            initial_energy += ((lattice[i][j] ^ lattice[i][jl])?JOverkBT:-JOverkBT);
-            initial_energy += ((lattice[i][j] ^ lattice[i][jr])?JOverkBT:-JOverkBT);
-            initial_energy += -EXT * ((lattice[i][j])?1:-1);
+            initial_energy = ((lsite ^ lup)?INT:-INT);
+            initial_energy += ((lsite ^ ldown)?INT:-INT);
+            initial_energy += ((lsite ^ lleft)?INT:-INT);
+            initial_energy += ((lsite ^ lright)?INT:-INT);
+            initial_energy += -EXT * ((lsite)?1:-1);
 
-            lattice[i][j] = !lattice[i][j];
+            lsite = !lsite;
 
-            final_energy = ((lattice[i][j] ^ lattice[il][j])?JOverkBT:-JOverkBT);
-            final_energy += ((lattice[i][j] ^ lattice[ir][j])?JOverkBT:-JOverkBT);
-            final_energy += ((lattice[i][j] ^ lattice[i][jl])?JOverkBT:-JOverkBT);
-            final_energy += ((lattice[i][j] ^ lattice[i][jr])?JOverkBT:-JOverkBT);
-            final_energy += -EXT * ((lattice[i][j])?1:-1);
+            final_energy = ((lsite ^ lup)?INT:-INT);
+            final_energy += ((lsite ^ ldown)?INT:-INT);
+            final_energy += ((lsite ^ lleft)?INT:-INT);
+            final_energy += ((lsite ^ lright)?INT:-INT);
+            final_energy += -EXT * ((lsite)?1:-1);
 
             dE = final_energy - initial_energy;
 
-            if(metro(rng) > exp(-dE))
-                lattice[i][j] = !lattice[i][j];
-
+            if(metro(rng) < exp(-dE)) // MC trial accepted
+                lattice[rand_site] = lsite;
         }
 
         energy = 0.0;
         mag_per_step = 0.0;
-        for(i = 0; i < N;i++)
+        for(s = 0; s < SIZE*SIZE;s++)
         {
-            il = (i==0)?N-1:i-1;
-            ir = (i==N-1)?0:i+1;
-            for(j = 0; j < N;j++)
-            {
-                jl = (j==0)?N-1:j-1;
-                jr = (j==N-1)?0:j+1;
+            i = s / SIZE;
+            j = s % SIZE;
 
-                energy += ((lattice[i][j] ^ lattice[il][j])?JOverkBT:-JOverkBT);
-                energy += ((lattice[i][j] ^ lattice[ir][j])?JOverkBT:-JOverkBT);
-                energy += ((lattice[i][j] ^ lattice[i][jl])?JOverkBT:-JOverkBT);
-                energy += ((lattice[i][j] ^ lattice[i][jr])?JOverkBT:-JOverkBT);
+            il = (i==0)?SIZE-1:i-1;
+            ir = (i==SIZE-1)?0:i+1;
 
-                energy += -EXT * ((lattice[i][j])?1:-1);
-                mag_per_step += ((lattice[i][j])?1:-1);
-            }
+            jl = (j==0)?SIZE-1:j-1;
+            jr = (j==SIZE-1)?0:j+1;
+            lsite = lattice[s];
+            lleft = lattice[i*SIZE+jl];
+            lright = lattice[i*SIZE+jr];
+            lup = lattice[il*SIZE+j];
+            ldown = lattice[ir*SIZE+j];
+
+            energy += ((lsite ^ lup)?INT:-INT);
+            energy += ((lsite ^ ldown)?INT:-INT);
+            energy += ((lsite ^ lleft)?INT:-INT);
+            energy += ((lsite ^ lright)?INT:-INT);
+
+            energy += -EXT * ((lsite)?1:-1);
+            mag_per_step += ((lsite)?1:-1);
         }
-        mag_per_step /= (static_cast<double>(N*N));
+        mag_per_step /= (static_cast<double>(SIZE*SIZE));
         logf<<k<<"\t"<<energy<<"\t"<<mag_per_step<<endl;
 
         // Output configuration
@@ -206,5 +226,7 @@ int main(int argc, char *argv[])
     }
 
     logf.close();
+    free(lattice);
+    cout<<endl;
     return 0;
 }
